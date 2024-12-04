@@ -1,0 +1,10 @@
+{
+    "georef_path"      : "data/ground_truth/Georeferencing",
+    "feature_path"     : "data/ground_truth/Feature Extraction",
+    "eval_csv"         : "data/eval_final_set.csv",
+    "id_field"         : "ID",
+    "cog_field"        : "COG ID",
+    "source_field"     : "Source",
+    "georef_field"     : "Georeferencing",
+    "ft_extract_field" : "Feature Extraction"
+}
