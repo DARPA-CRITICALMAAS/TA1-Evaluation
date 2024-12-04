@@ -71,67 +71,115 @@ class FeatureEval:
                                    'feature_type', 'message', 'data',
                                    'georeferenced_data', 'legend_data_added']
 
-        direct_query = 'valid_synops == True and missing_val.notna() and num_missing.notna() and perc_missing < 100' \
-                       'and orch_info.notna() and size_df > 0'
+        self.direct_query = 'valid_synops == True and missing_val.notna() and num_missing.notna() and perc_missing < 100 ' \
+                            'and orch_info.notna() and size_df > 0'
 
         indirect_query = 'valid_synops == True and missing_val.notna() and num_missing.notna() and perc_missing == 100'
 
-        # Polygons Performer Data - if applicablen
-        #if self.inf_polygon_schema is not None:
-        #    self.inf_polygon_orch         = self._build_orchestration_match(inf_schema=self.inf_polygon_schema)
-            #self.direct_eval_polygon      = self.inf_polygon_orch.query(direct_query)
-            #self.failed_eval_polygon      = self.inf_polygon_orch.loc[self.inf_polygon_orch.index.difference(self.direct_eval_polygon.index.tolist())]
+        if evaluate_feature == "polygon":
+            self.polygon_eval_data = self._polygon_eval()
+
+        elif evaluate_feature == "line":
+            self.line_eval_data = self._line_eval()
+
+        elif evaluate_feature == "point":
+            self.point_eval_data = self._point_eval()
+
+        elif evaluate_feature == "all":
+            self.polygon_eval_data = self._polygon_eval()
+            self.line_eval_data    = self._line_eval()
+            self.point_eval_data   = self._point_eval()
+
+    # these functions (polygon_eval, point_eval, line_eval) can be into one; however, there is an issue with the
+    # unmatched / uncertain polygons that need to be addressed.
+    def _polygon_eval(self) -> Union[List, None]:
+        if self.inf_polygon_schema is not None:
+            inf_polygon_orch         = self._build_orchestration_match(inf_schema=self.inf_polygon_schema)
+            direct_eval_polygon      = inf_polygon_orch.query(self.direct_query)
+            failed_eval_polygon      = inf_polygon_orch.loc[inf_polygon_orch.index.difference(direct_eval_polygon.index.tolist())]
 
             # Direct match parallelization metrics - 23 hrs. 55 min. 34 sec.
-            #if len(self.direct_eval_polygon) > 0:
-            #    self.direct_orch_info_polygon = self._concat_orch_data(df=self.direct_eval_polygon)
-            #    self.direct_polygon_metrics   = self._execute_parallel(df_info      = self.direct_orch_info_polygon,
-            #                                                           direct_eval  = self.direct_eval_polygon,
-            #                                                           use_eval_set = False)
+            if len(direct_eval_polygon) > 0:
+                direct_orch_info_polygon = self._concat_orch_data(df=direct_eval_polygon)
+                direct_polygon_metrics   = self._execute_parallel(df_info      = direct_orch_info_polygon,
+                                                                  direct_eval  = direct_eval_polygon,
+                                                                  use_eval_set = False)
 
-            # Unmatched / crude-match parallelization metrics - does not work
+                return [inf_polygon_orch, direct_eval_polygon, failed_eval_polygon, direct_orch_info_polygon, direct_polygon_metrics]
+
+            # Unmatched / crude-match parallelization metrics - does not work (leave commented until investigated)
             #if len(self.failed_eval_polygon) > 0:
             #    self.failed_eval_polygon_metrics = self.failed_eval_polygon.query(indirect_query)
             #    self.crude_orch_info_polygon     = self._build_orchestration_crude(failed_eval = self.failed_eval_polygon_metrics,
             #                                                                       feat_type   = "polygon")
 
+        else:
+            return None
+
+    def _point_eval(self) -> Union[List, None]:
 
         # Points Performer Data - if applicable - 6 hrs. 5 min. 58 sec.
-        #if self.inf_point_schema is not None:
-        #    self.inf_point_orch         = self._build_orchestration_match(inf_schema=self.inf_point_schema)
-        #    self.direct_eval_point      = self.inf_point_orch.query(direct_query)
-        #    self.failed_eval_point      = self.inf_point_orch.loc[self.inf_point_orch.index.difference(self.direct_eval_point.index.tolist())]
+        if self.inf_point_schema is not None:
+            inf_point_orch         = self._build_orchestration_match(inf_schema=self.inf_point_schema)
+            direct_eval_point      = inf_point_orch.query(self.direct_query)
+            failed_eval_point      = inf_point_orch.loc[inf_point_orch.index.difference(direct_eval_point.index.tolist())]
 
-        #    if len(self.direct_eval_point) > 0:
-        #        self.direct_orch_info_point = self._concat_orch_data(df=self.direct_eval_point)
-        #        self.direct_point_metrics   = self._execute_parallel(df_info      = self.direct_orch_info_point,
-        #                                                             direct_eval  = self.direct_eval_point,
-        #                                                             use_eval_set = True)
+            if len(direct_eval_point) > 0:
+                direct_orch_info_point = self._concat_orch_data(df=direct_eval_point)
+                direct_point_metrics   = self._execute_parallel(df_info      = direct_orch_info_point,
+                                                                direct_eval  = direct_eval_point,
+                                                                use_eval_set = True)
+            else:
+                direct_orch_info_point = None
+                direct_point_metrics   = None
 
-        #    if len(self.failed_eval_point) > 0:
-        #        self.crude_orch_info_point = self._build_orchestration_crude(failed_eval = self.failed_eval_point,
-        #                                                                     feat_type   = 'point')
-        #        self.crude_point_metrics   = self._execute_parallel_crude(df_info      = self.crude_orch_info_point,
-        #                                                                  use_eval_set = True)
+            if len(failed_eval_point) > 0:
+                crude_orch_info_point = self._build_orchestration_crude(failed_eval = failed_eval_point,
+                                                                        feat_type   = 'point')
+                crude_point_metrics   = self._execute_parallel_crude(df_info      = crude_orch_info_point,
+                                                                     use_eval_set = True)
 
+            else:
+                crude_orch_info_point = None
+                crude_point_metrics   = None
 
+            return [inf_point_orch, direct_eval_point, failed_eval_point, direct_orch_info_point, direct_point_metrics,
+                    crude_orch_info_point, crude_point_metrics]
+
+        else:
+            return None
+
+    def _line_eval(self) -> Union[List, None]:
         # Lines Performer Data - if applicable (4 hrs. 0 min. 52 sec.)
-        #if self.inf_line_schema is not None:
-        #    self.inf_line_orch = self._build_orchestration_match(inf_schema=self.inf_line_schema)
-        #    self.direct_eval_line = self.inf_line_orch.query(direct_query)
-        #    self.failed_eval_line = self.inf_line_orch.loc[self.inf_line_orch.index.difference(self.direct_eval_line.index.tolist())]
+        if self.inf_line_schema is not None:
+            inf_line_orch    = self._build_orchestration_match(inf_schema=self.inf_line_schema)
+            direct_eval_line = inf_line_orch.query(self.direct_query)
+            failed_eval_line = inf_line_orch.loc[inf_line_orch.index.difference(direct_eval_line.index.tolist())]
 
-        #    if len(self.direct_eval_line) > 0:
-        #        self.direct_orch_info_line = self._concat_orch_data(df=self.direct_eval_line)
-        #        self.direct_line_metrics   = self._execute_parallel(df_info      = self.direct_orch_info_line,
-        #                                                            direct_eval  = self.direct_eval_line,
-        #                                                            use_eval_set = True)
+            if len(direct_eval_line) > 0:
+                direct_orch_info_line = self._concat_orch_data(df=direct_eval_line)
+                direct_line_metrics   = self._execute_parallel(df_info      = direct_orch_info_line,
+                                                               direct_eval  = direct_eval_line,
+                                                               use_eval_set = True)
+            else:
+                direct_orch_info_line = None
+                direct_line_metrics   = None
 
-        #    if len(self.failed_eval_line) > 0:
-        #        self.crude_orch_info_line = self._build_orchestration_crude(failed_eval = self.failed_eval_line,
-        #                                                                    feat_type   = 'line')
-        #        self.crude_line_metrics  = self._execute_parallel_crude(df_info = self.crude_orch_info_line,
-        #                                                                use_eval_set = True)
+            if len(self.failed_eval_line) > 0:
+                crude_orch_info_line = self._build_orchestration_crude(failed_eval = failed_eval_line,
+                                                                       feat_type   = 'line')
+                crude_line_metrics  = self._execute_parallel_crude(df_info      = crude_orch_info_line,
+                                                                   use_eval_set = True)
+
+            else:
+                crude_orch_info_line = None
+                crude_line_metrics   = None
+
+            return [inf_line_orch, direct_eval_line, failed_eval_line, direct_orch_info_line, direct_line_metrics,
+                    crude_orch_info_line, crude_line_metrics]
+
+        else:
+            return None
 
     def _read_data(self, df: Union[str, None, DataFrame], to_concat: bool = False) -> Union[DataFrame, None]:
         """
