@@ -60,7 +60,7 @@ if __name__ == "__main__":
                             feat_tif_file      = feat_tif_file,
                             output_dir         = output_dir,
                             eval_set           = "data/eval_final_set.csv",
-                            evaluate_feature   = "all",
+                            evaluate_feature   = "all", # performers can change this to 'point', 'line', 'polygon', or 'all' for what feature type to evaluate
                             dynamic_buffer     = 0.05)
 
     data = AggMetrics(polygon_results_path = f'{output_dir}/polygon',
