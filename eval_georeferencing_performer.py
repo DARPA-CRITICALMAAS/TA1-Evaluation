@@ -6,6 +6,7 @@ if __name__ == "__main__":
     16 CPU machine => 22 seconds. 
     """
 
+    # Do not change this - the output path of these files were defined in an earlier process (pre_eval_pipeline_georeference.py)
     tif_files = "data/ground_truth/georef_tif_files.parquet"
     eval_dict = "data/ground_truth/cog_id_info.json"
 
