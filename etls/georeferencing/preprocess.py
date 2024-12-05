@@ -27,14 +27,23 @@ Output:
         - same_epsgs        => Quick way to determine if the Shapely point had to be reprojected or not based. If True,
                                then the proj_epsgs and proj_pnts are the same as orig_epsgs and orig_pnts respectively.
 """
-
+import os.path
 from typing import Union
-from pandas import DataFrame, read_csv, concat
+from pandas import DataFrame, read_csv, concat, read_parquet
 from etls.utils import ParallelPool, SpatialOps
 from multiprocessing import Manager, cpu_count
 from functools import partial
 import numpy as np
 from tqdm import tqdm
+
+import os
+import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir  = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+
+from ..utils import DataEng
 
 
 class PreEvalGeoref:
@@ -57,7 +66,11 @@ class PreEvalGeoref:
         eval_lambda = lambda x: eval_df[x]
 
         if isinstance(tif_files, str):
-            tif_files = read_csv(tif_files)
+            get_ext = os.path.splitext(tif_files)[-1]
+            if get_ext == ".parquet":
+                tif_files = read_parquet(tif_files)
+            elif get_ext == ".csv":
+                tif_files = read_csv(tif_files)
 
         self.num_gcps        = num_gcps
         self.unique_samples  = unique_samples
@@ -100,9 +113,17 @@ class PreEvalGeoref:
             L1.append(tmp_df)
 
     def _eval_df(self, eval_df, eval_id_field, eval_cog_id_field) -> dict:
-        if isinstance(eval_df, str) or isinstance(eval_df, DataFrame):
-            if isinstance(eval_df, str):
+
+        if isinstance(eval_df, str):
+            get_ext = os.path.splitext(eval_df)[-1]
+
+            if get_ext == ".json":
+                eval_df = DataEng.read_json(config_file=eval_df)
+
+            elif get_ext == ".csv":
                 eval_df = read_csv(eval_df)
+
+        if isinstance(eval_df, DataFrame):
 
             eval_df = eval_df[[eval_id_field, eval_cog_id_field]].drop_duplicates([eval_id_field, eval_cog_id_field])
             eval_df = {i: c for i, c in zip(eval_df[eval_id_field], eval_df[eval_cog_id_field])}
