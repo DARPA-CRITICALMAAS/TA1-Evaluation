@@ -102,7 +102,7 @@ class PreEvalGeoref:
         for row in tqdm(range(len(list_of_tifs))):
             # Row from the dataframe, acquire tif path, and ID of the map.
             tmp_row = list_of_tifs.iloc[row]
-            tif     = tmp_row[self.file_path_field]
+            tif     = tmp_row[self.file_path_field].replace("\\", "/")
             id_map  = tmp_row[self.id_field]
 
             # Construct DataFrame by randomly selecting pixel space, converting to spatial points, check spatial
