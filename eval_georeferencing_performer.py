@@ -33,16 +33,15 @@ if __name__ == "__main__":
 
     # failed_cogs_download = georef_metrics.failed_download
     rmse_data = georef_metrics.concat_df
-    # rmse_data.to_parquet(f"{output_dir}/rmse_metrics_georeferencing.parquet")
+    rmse_data.to_parquet(f"{output_dir}/rmse_metrics_georeferencing.parquet")
 
-    #
-    eval_df = read_csv("data/eval_final_set.csv")
-
+    # Do not change this.
+    eval_df      = read_csv("data/eval_final_set.csv")
     augment_data = (
         eval_df
         .merge(rmse_data, left_on=['COG ID'], right_on=['cog_id'])
     )
 
-    # augment_data = rmse_data.merge(data.inventory_data.eval_df, left_on=['cog_id'], right_on=['COG ID'])
-    # augment_data.to_csv("data/final_metrics/georeferencing_rmse_12_month.csv", index=False)
+    # You may change the output_dir to another folder
+    augment_data.to_csv(f"{output_dir}/georeferencing_rmse_12_month.csv", index=False)
     # rmse_data_missing = rmse_data.query('log == "annotated-missing"')
