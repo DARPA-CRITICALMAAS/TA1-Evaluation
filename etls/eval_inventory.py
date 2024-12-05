@@ -378,7 +378,12 @@ class EvalUpdates(EvalSet):
                 .assign(id = i)
             )
             missing_set  = list(set(use_unique_geologic) - set(df['binary_value']))
-            perc_success = round((len(use_unique_geologic) - len(missing_set)) / len(use_unique_geologic), 3)
+
+            try:
+                perc_success = round((len(use_unique_geologic) - len(missing_set)) / len(use_unique_geologic), 3)
+
+            except ZeroDivisionError:
+                perc_success = 0
             #value_file   = f"{self.feature_path}/{i}/value_field_match.feather"
 
             # Compress the matched values in a list - grouping by shapefile and field name.
