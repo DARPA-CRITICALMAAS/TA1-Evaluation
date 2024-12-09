@@ -47,6 +47,7 @@ import utm
 import rasterio
 from rasterio.control import GroundControlPoint
 from rasterio.transform import from_gcps, AffineTransformer
+import cv2
 
 # Miscellaneous packages
 from operator import add, sub
@@ -264,6 +265,38 @@ class SpatialOps:
             get_height = raster_inf.height
 
         return [raster_inf, crs, transform, get_width, get_height]
+
+    def get_pixel_coordinates(self, polygon: Polygon, img_dim: tuple):
+        """
+        Acquire pixel coordinates within a provided polygon.
+
+        :param polygon: Shapely Polygon geometry. May need to convert geographic coordinates to pixels first.
+        :param img_dim: Tuple representing (height, width) of the image.
+
+        :return: List of pixel coordinates (x,y) within the polygon.
+        """
+
+        mask = np.zeros(img_dim, dtype=np.uint8)
+        #x,y  = polygon.exterior.xy
+        #pts  = np.array([[int(x[i]), int(y[i])]
+        #                 for i in range(len(x))], dtype=np.int32).reshape((-1, 1, 2))
+        #cv2.fillPoly(mask, [pts], 255)
+
+        pnts = np.array(polygon.exterior.coords).astype(np.int32).reshape((-1, 1, 2))
+        cv2.fillPoly(mask, [pnts], (255, 0, 0))
+        pixel_coords = np.where(mask == 255)
+
+        return np.array(list(zip(pixel_coords[1], pixel_coords[0])))
+
+    def get_pixel_coordinates_by_line(self, line: LineString, img_dim: tuple):
+        mask       = np.zeros(img_dim, dtype=np.uint8)
+        line_coord = line.coords.xy
+        x1,y1 = int(line_coord[0][0]), int(line_coord[0][1])
+        x2,y2 = int(line_coord[1][0]), int(line_coord[1][1])
+        cv2.line(mask, (x1, y1), (x2, y2), 255)
+        pixel_coords = np.where(mask == 255)
+
+        return np.array(list(zip(pixel_coords[1], pixel_coords[0])))
 
     def construct_gcp(self, row, col, x, y) -> GroundControlPoint:
         """
