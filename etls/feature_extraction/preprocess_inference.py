@@ -5,25 +5,108 @@ Date Created: Oct. 2024
 
 Last Updated: Nov. 2024
 
-About:
+About: Pre-processing performer data of feature extraction based on the following high-level steps:
+    1) Download annotated legend items from the CDR, extract, convert, and export (as Parquet files).
+    2) Download performer data from the CDR
+    3) Convert downloaded performer data to DataFrames (and export as Parquet files).
+    4) Augmentation and validation process of the converted performer data
+        - Identify annotated legend items and if a px-bbox exists
+        - Polygon, lines, and point conversion -> reproject, spatial indexing, and legend IoU or alternative geologic value identification
+        - Convert to GeoDataFrame and export as GeoParquet files.
+    5) Export performer data information (high level overview) including a synopsis.
 
+Pre-Requisites: Must run PrepEval class beforehand (if have not saved the ground_data.match_binary_vector,
+                ground_data.inhouse_feat, ground_data.feat_tif_file, ground_data.eval_dict, ground_data.crude_match).
+
+Outputs: FOR FEATURE EXTRACTION EVALUATION VECTOR METRICS (not including interim byproducts).
+
+- Annotated and extracted legend items
+    - cog_id            => COG ID.
+    - system            => Name of performer or annotated system.
+    - system_version    => System version.
+    - category          => Feature Type category (e.g., line, point, polygon)
+    - label             => Label of the geologic value.
+    - abbreviation      => Abbreviation of the geologic value.
+    - description       => Description of the geologic value.
+    - pattern           => Pattern type of the geologic value.
+    - color             => Color of the geologic value.
+    - px_bbox           => Polygon (converted from pixel space) / BBOX of the geologic value item.
+
+- Performer data converted from JSON to Parquet
+    - system            => Name of the performer system.
+    - system_version    => System version.
+    - cog_id            => COG ID.
+    - p_num_geom        => Number of vertices (i.e., points) representing the geometry.
+    - type              => Feature Type (Point, LineString, Polygon).
+    - coordinates       => Geographic coordinates (to be converted to Geometry).
+    - abbreviation      => Abbreviation / geologic value.
+    - color             => Color of the geologic value.
+    - pattern           => Pattern type of the geologic value.
+    - px_bbox           => Pixel space BBOX of the legend item corresponding to the abbreviation / geologic value.
+
+- Performer data augmented & validated in GeoDataFrames (saved as GeoParquet).
+    - system            => Name of the performer system.
+    - system_version    => System version.
+    - cog_id            => COG ID.
+    - p_num_geom        => Number of vertices (i.e., points) representing the geometry.
+    - px_bbox           => Pixel space BBOX of the legend item corresponding to the abbreviation / geologic value.
+    - abbreviation      => Abbreviation / geologic value.
+    - color             => Color of the geologic value.
+    - pattern           => Pattern type of the geologic value.
+    - index             => Row Index value (to be set as the p_index in the final results).
+    - type              => Feature Type (Polygon, LineString, Point).
+    - coordinates       => Original coordinates (pre-geometry).
+    - geom              => Geometry by taking the coordinates and reproject if required based on the ground-truth TIF file.
+    - min_h3            => H3 spatial index value set at a defined minimum resolution.
+    - max_h3            => H3 spatial index value set at a defined maximum resolution.
+    - min_res           => Minimum resolution number set for H3 spatial indexing.
+    - max_res           => Maximum resolution number set for H3 spatial indexing.
+    - geo_value         => Geologic value otherwise, "Use Spatial Index".
+    - matched_ratio     => Matched ratio value if identifying geologic value through list of annotated legend items or binary values.
+    - legend_iou        => If geologic value identified through annotated legend items via IoU - the IoU value.
+    - match_binary      => If geologic value was matched through the binary rasters values.
+
+- Performer schema overview ("{feature_type}_performers_master.parquet")
+    - id                    => NGMDB ID.
+    - cog_id                => COG ID.
+    - system                => Name of the performer system.
+    - system_version        => System version.
+    - feature_type          => Feature type (polygon, line, or point).
+    - message               => Download from the CDR - message whether success or not.
+    - data                  => Whether the data was extracted or not.
+    - crs                   => CRS (spatial reference system) from the ground-truth TIF file.
+    - output_file           => Location of the performer GeoParquet file.
+    - legend_extracted      => Location of the annotated legend extraction Parquet file.
+    - output_synopsis       => Output synposis file that provides summary overview of the performer GeoParquet file.
+    - georeferenced_data    => Whether the performer data was georeferenced or not.
+    - legend_data_added     => Whether to contain legend data in the performer data or not.
+
+- Performer synopsis overview ("{system}__{system_version}__{cog_id}__{feature_type}__synopsis.parquet")
+    - abbreviation          => Geologic value abbreviation (from the performer data).
+    - geo_value             => Geologic value either that is matched with the abbreviation either annotated legend IoU,
+                               sequence differentiation matching with the legend or binary raster values.
+    - count                 => Number of features that contain that geologic value.
+    - matched_ratio         => Matched ratio if alternative match process (outside of legend IoU) happened.
+    - match_binary          => Matched binary if alternative match process (outside of legend IoU) happened.
+    - perc                  => Percentage 0 to 1 (i.e., 100%) of the total features representing for that geologic value.
+"""
 
 """
-import pyproj.exceptions
-
-"""
-Test packages
+Test package
 """
 from pandas import read_parquet
 
-
-from tqdm import tqdm
-from typing import List, Union
+# Spatial and non-spatial data engineering packages
 from geopandas import GeoDataFrame
 from pandas import DataFrame, read_csv, concat
 from shapely.geometry import Point, Polygon, LineString, box
 from shapely.wkt import loads
+import pyproj.exceptions
 from numpy import array_split
+
+# Miscellaneous packages
+from tqdm import tqdm
+from typing import List, Union
 from functools import partial
 from multiprocessing import Manager, cpu_count
 
@@ -63,22 +146,33 @@ class PreprocessInf:
                  legend_data: bool = True):
 
         """
-        :param cdr_token:
-        :param inhouse_feat:
-        :param eval_df:
-        :param feat_tif_file:
-        :param binary_df:
-        :param output_dir:
-        :param legend_output_dir:
-        :param eval_id_field:
-        :param eval_cog_id_field:
-        :param local_schema_process:
-        :param cdr_systems:
-        :param match_threshold:
-        :param min_res:
-        :param max_res:
-        :param georeference_data:
-        :param legend_data:
+        :param cdr_token: CDR token.
+        :param inhouse_feat: Ground-truth pre-process that lists NGMDB IDs that fulfill requirements.
+        :param eval_df: Dictionary or string (i.e., name of the JSON or CSV file) that has NGMDB ID to COG ID.
+        :param feat_tif_file: DataFrame or string (i.e., name of the Parquet or CSV file) that contains TIF file info in the ground-truth.
+        :param binary_df: DataFrame or string (i.e., name of the Parquet or CSV file) that has matched geologic values from
+                          the binary raster filenames to the shapefiles.
+        :param output_dir: Output directory to where performer data will be downloaded, extracted, and processed to
+                           appropriate data structure.
+        :param legend_output_dir: Output directory to where the annotated legend items have been downloaded, processed,
+                                  and stored.
+        :param eval_id_field: If the eval_df is a DataFrame, identify the eval id field. Default is "ID".
+        :param eval_cog_id_field: If the eval_df is a DataFrame, identify the eval cog id field. Default is "COG ID".
+        :param local_schema_process: If the data is downloaded directly from the performer system, rather than the CDR
+                                     then set a local schema process as a list. Currently, there is no implementation of
+                                     it. Leave it as None (the default).
+        :param cdr_systems: Dictionary that defines the performers system and its system version to download from CDR
+                            and extract. Format example:
+                            {
+                                "performers" : [{"system" : "uiuc-icy-resin", "system_version" : "0.4.6"},
+                                                {"system" :  "uncharted-points", system_version" : "0.0.5"}]
+                            }
+        :param match_threshold: Match similarity threshold to the geologic values in the ground-truth; default to 0.9.
+                                The range is 0 to 1.
+        :param min_res: Minimum H3 spatial resolution (coarse level) to index. Defaults to 6. Values are 1 (coarsest) - 15 (finest).
+        :param max_res: Maximum H3 spatial resolution (fine level) to index. Defaults to 9. Values are 1 (coarsest) - 15 (finest).
+        :param georeference_data: Indicate whether to use georeferenced data when downloading from the CDR. Defaults to True.
+        :param legend_data: Indicate whether to incorporate legend data when downloaded from the CDR. Defaults to True.
         """
 
         # Evaluation set - identify COG IDs based on the (NGMDB) ID
@@ -135,7 +229,7 @@ class PreprocessInf:
         Conduct Legend Item extraction and then apply that during feature extraction to see if there is alignment 
         If there is alignment, can proceed to evaluation. If there isn't, then use spatial indexing instead which will 
         still have high compute complexity to iterate each GeoParquet. To prevent that, would need to construct hierarchical 
-        lookup table.
+        lookup table. Currently, the hierarchical lookup table is not implemented. 
         """
         self.legend_info = LegendItemsCDR(config = legend_anno_config).concat_L1
         self.legend_info.to_parquet(f"{legend_output_dir}/legend_master_file.parquet")
@@ -150,18 +244,36 @@ class PreprocessInf:
             self.line_infer_file    = download_from_cdr[1][1]
             self.point_infer_file   = download_from_cdr[2][1]
 
+            """
+            Schema of these interim outputs:
+            - cog_id        => COG ID.
+            - output_file   => Location and name of the performer raw file downloaded from the CDR. 
+            - response_code => Request response download code - ideally want to see "200".
+            - message       => Indicates whether data has been downloaded successfully or not. 
+            - feature_type  => Feature type - "polygon", "line", or "point".
+            - system        => Name of the performer system.
+            - sys_version   => System version of the performer. 
+            """
             self.polygon_infer_file.to_parquet(f"{output_dir}/polygon_pre_master.parquet")
             self.line_infer_file.to_parquet(f"{output_dir}/line_pre_master.parquet")
             self.point_infer_file.to_parquet(f"{output_dir}/point_pre_master.parquet")
 
+            # Debug and testing purposes - if so, comment out the code after the "if" statement.
             #self.polygon_infer_file = read_parquet('data/inferenced_cdr/Feature Extraction/polygon_pre_master.parquet')
             #self.line_infer_file    = read_parquet('data/inferenced_cdr/Feature Extraction/line_pre_master.parquet')
             #self.point_infer_file   = read_parquet('data/inferenced_cdr/Feature Extraction/point_pre_master.parquet')
 
-            # Parallelization
+            # Parallelization to extract and process performer data.
             self.data_extract = self._feature_extraction_conversion()
 
-    def _read_files(self, file):
+    def _read_files(self, file: Union[DataFrame, str]) -> DataFrame:
+        """
+        Read appropriate files.
+
+        :param file: String (name of file) or DataFrame.
+
+        :return: DataFrame.
+        """
         if isinstance(file, str):
             get_ext = os.path.splitext(file)[-1]
             if get_ext == ".csv":
@@ -174,20 +286,53 @@ class PreprocessInf:
 
         return df
 
-    def _prep_and_execute_process(self, df: DataFrame, feat_type):
-        L1 = Manager().list()
+    def _prep_and_execute_process(self, df: DataFrame, feat_type: str = Union["polygon", "line", "point"]) -> DataFrame:
+        """
+        Main parallelization function that conducts feature extraction conversion, indexing, and identifying geologic values
+        per geometry (i.e., feature).
+
+        :param df: DataFrame - containing the polygon_infer_file, line_infer_file, or point_infer_file.
+        :param feat_type: Feature type that accepts only "polygon", "line", and "point".
+
+        :return: Concatenated feature extracted DataFrame. Indirectly outputs to parquet file.
+
+        Schema output:
+        - id                    => NGMDB ID.
+        - cog_id                => COG ID.
+        - system                => Name of the performer system.
+        - system_version        => System version of the performer.
+        - feature_type          => Feature type - "polygon", "line", or "point".
+        - message               => Indicates whether data has been downloaded successfully or not from the CDR.
+        - data                  => Indicates whether the raw data has been extracted successfully or not.
+        - crs                   => CRS (epsg) of the extracted data based on its corresponding ground-truth TIF file.
+                                   Used to re-project for more precise evaluation to the ground-truth.
+        - output_file           => Output path including GeoParquet file of the extracted performer data.
+        - legend_extracted      => Output path including Parquet file of the annotated legend data. Otherwise, use
+                                   Spatial Index to potentially identify geologic value of each feature.
+        - output_synopsis       => Output path including Parquet file htat provides an overview of the geologic values
+                                   if applicable.
+        - georeferenced_data    => Indicates whether the performer data has been georeferenced from the CDR.
+        - legend_data_added     => Indicates whether the performer data has legend data in their features.
+        """
+        L1           = Manager().list()
         partial_func = partial(self._convert_cdr, L1=L1)
         sub_poly     = df.query('output_file.notna()', engine='python')
         split_dfs    = array_split(sub_poly, cpu_count())
         ParallelPool(start_method='spawn', partial_func=partial_func, main_list=split_dfs, num_cores=cpu_count())
-        df_extr    = concat(L1).reset_index().drop(columns=['index'])
+        df_extr      = concat(L1).reset_index().drop(columns=['index'])
         df_extr.to_parquet(f"{self.output_dir}/{feat_type}_performers_master.parquet")
 
         return df_extr
 
-    def _feature_extraction_conversion(self):
+    def _feature_extraction_conversion(self) -> dict:
+        """
+        Extraction, conversion, indexing, and geologic value identification process for polygons, lines, and points.
+
+        :return: Dictionary of the converted performer data. Indirectly - {feature_type}_schema.parquet files.
+        """
 
         feature_dict = {}
+        # For polygons
         if len(self.polygon_infer_file) > 0:
             poly_extr = self._prep_and_execute_process(df=self.polygon_infer_file, feat_type="polygon")
 
@@ -195,6 +340,7 @@ class PreprocessInf:
                 feature_dict['polygon'] = poly_extr
                 poly_extr.to_parquet(f"{self.output_dir}/polygon_schema.parquet")
 
+        # For lines
         if len(self.line_infer_file) > 0:
             line_extr = self._prep_and_execute_process(df=self.line_infer_file, feat_type='line')
 
@@ -202,6 +348,7 @@ class PreprocessInf:
                 feature_dict['line'] = line_extr
                 line_extr.to_parquet(f"{self.output_dir}/line_schema.parquet")
 
+        # For points
         if len(self.point_infer_file) > 0:
             point_extr = self._prep_and_execute_process(df=self.point_infer_file, feat_type='point')
 
@@ -479,7 +626,6 @@ class PreprocessInf:
         during evaluation metrics.
 
         :param data_info: Temporary orchestrated master set to read CDR files for extraction.
-        :param cdr_systems: CDR System information as a dictionary.
         :param L1: List manager to append extraction information.
         """
 
@@ -567,6 +713,8 @@ class PreprocessInf:
 
                         del extract_df, clean_extract
 
+                        # Polygon or line conversion - from either projected / georeferenced or pure pixel space.
+                        # Incorporate spatial indexing.
                         geom_df = self._coord_poly_line_convert(tmp_df    = geom_extract,
                                                                 feat_type = feat_type,
                                                                 crs       = str(crs),
@@ -581,17 +729,20 @@ class PreprocessInf:
                         extract_legend = None
                         del extract_df, clean_extract
 
+                        # Point conversion - from either projected / georeferenced or pure pixel space.
+                        # Incorporate spatial indexing.
                         geom_df     = self._coord_point_convert(tmp_df    = geom_extract,
                                                                 crs       = str(crs),
                                                                 cog_id    = cog_id,
                                                                 tif_file  = tif_file,
                                                                 transform = transform)
 
+                    # If there is a GeoDataFrame constructed - concatenate the rest of the data
                     if geom_df is not None:
                         # Concatenate system-extract DataFrame with the GeoDataFrame and assign legend bounding box
                         concat_geom = concat([sys_extract, geom_df], axis=1).assign(px_bbox=px_bbox)
 
-                        # Legend abbreviation assign
+                        # Legend abbreviation assign - assign each feature to a legend item extraction
                         if output_anno is not None:
                             abbrev_values = self._legend_iou(performer_df = concat_geom,
                                                              legend_df    = extract_legend,
@@ -643,6 +794,7 @@ class PreprocessInf:
                         tmp_info.append([get_id, cog_id, tmp_sys, tmp_sys_v, feat_type, message, 'extracted data',
                                          str(crs).lower(), output_file, output_anno, output_set, self.georeference_data, self.legend_data])
 
+                    # Inform that there is a CRS failure and cannot do projection
                     else:
                         tmp_info.append([get_id, cog_id, tmp_sys, tmp_sys_v, feat_type, message, f"CRS failure - {str(crs).lower()}",
                                          None, None, None, None, self.georeference_data, self.legend_data])
@@ -660,18 +812,38 @@ class PreprocessInf:
                                                'message', 'data', 'crs', 'output_file', 'legend_extracted',
                                                'output_synopsis', 'georeferenced_data', 'legend_data_added']))
 
-    def _legend_iou(self, performer_df, legend_df, get_id):
+    def _legend_iou(self, performer_df, legend_df, get_id) -> DataFrame:
+        """
+        IoU of the annotated legend items to each feature in the performer to determine what label it is.
+
+        :param performer_df: Performer converted dataset.
+        :param legend_df: Annotated legend dataset.
+        :param get_id: NGMDB ID.
+
+        :return: DataFrame
+        - geo_value     => Geologic value or "Use Spatial Index" as a secondary approach to identify the geologic value.
+        - matched_ratio => Matched ratio (i.e., string similarity) between the geologic value and annotated legend item if found; otherwise, None.
+        - legend_iou    => IoU value if applicable; otherwise, None.
+        - match_binary  => If no IoU, but searched in the matched / crude_match parquet file from the geologic value and
+                           successful; otherwise, None or False.
+        """
         iou_data     = []
         for p,a in zip(performer_df['px_bbox'], performer_df['abbreviation']):
+
+            # If there is no use spatial index or use abbreviation require or is not none, then perform IoU.
             if (p != "Use Spatial Index") and (p != "Use Abbreviation") and (p is not None):
                 try:
                     tmp_data = []
                     p        = loads(p)
+
+                    # Iterate through each annotated legend item and find the maximum IoU.
                     for d in legend_df['px_bbox']:
                         d = loads(d)
                         tmp_data.append(SpatialOps().IoU_calc(geom1=p, geom2=d))
                     max_iou     = max(tmp_data)
                     idx_lgnd    = tmp_data.index(max_iou)
+
+                    # Acquire legend abbreviation and label - if either exists.
                     lgnd_abbrev = re.sub(r'\W+', '', legend_df['abbreviation'].iloc[idx_lgnd])
                     lgnd_label  = re.sub(r'\W+', '', legend_df['label'].iloc[idx_lgnd])
 
@@ -684,10 +856,12 @@ class PreprocessInf:
                 except TypeError:
                     iou_data.append(["Use Spatial Index", None, None, None])
 
+            # If there is a Spatial Index - then indicate that it needs to be done as a Spatial Index.
             else:
                 if p == "Use Spatial Index" or p is None:
                     iou_data.append(["Use Spatial Index", None, None, False])
 
+                # If there is a recommendation to use abbreviation, then try to acquire geologic value based on "ft_match_binary.parquet".
                 elif p == "Use Abbreviation":
                     a = re.sub(r'\W+', ' ', a).lower()
 
@@ -697,18 +871,21 @@ class PreprocessInf:
                         .explode(['geo_value_vector'])
                     )
 
+                    # If it exists, then do sequence matching
                     if len(sub_bin) > 0:
                         pre_values  = [[d.lower(), d] for d in sub_bin['geo_value_vector'].unique()]
                         geo_values  = [p[0] for p in pre_values]
                         uniq_values = [p[1] for p in pre_values]
                         match       = self._sequence_matcher(str1=a, str2_list=geo_values, threshold=self.match_threshold)
 
+                        # If there is 1 geologic value and the direct match is not spatial index recommended, then acquire the geologic value.
                         if len(geo_values) > 0:
                             if match[0] != "Use Spatial Index":
                                 match_value = geo_values.index(match[0])
                                 get_value   = uniq_values[match_value]
                                 iou_data.append([get_value, match[1], None, True])
 
+                            # Otherwise perform crude match approach if it exists
                             else:
                                 if self.crude_grp_binary is not None:
                                     sub_bin = (
@@ -743,6 +920,7 @@ class PreprocessInf:
                         else:
                             iou_data.append([match[0], match[1], None, False])
 
+                    # Crude matching approach
                     elif self.crude_grp_binary is not None:
                         sub_bin = (
                             self.crude_grp_binary
@@ -784,7 +962,15 @@ class PreprocessInf:
 
         return DataFrame(iou_data, columns=['geo_value', 'matched_ratio', 'legend_iou', 'match_binary'])
 
-    def _convert_bbox(self, x, transform):
+    def _convert_bbox(self, x, transform) -> Union[box, str]:
+        """
+        Convert pixel space BBOX to geographic coordinates.
+
+        :param x: Pixel space as a list.
+        :param transform: AffineTransformer.
+
+        :return: Either Shapely Box or "Use Spatial Index"
+        """
         try:
             # Might need to change the ordering back
             min_points = SpatialOps().pixel2coord_raster(raster_transform=transform, row_y_pix=x[1], col_x_pix=x[0])
@@ -802,7 +988,16 @@ class PreprocessInf:
         except TypeError:
             return "Use Spatial Index"
 
-    def _sequence_matcher(self, str1, str2_list, threshold):
+    def _sequence_matcher(self, str1, str2_list, threshold) -> List:
+        """
+        Sequence Differentiation matcher.
+
+        :param str1: String.
+        :param str2_list: String or list of strings.
+        :param threshold: Minimum match threshold - default set to 0.9.
+
+        :return: List containing - Sequence match value or Use Spatial Index, sequence threshold value or None.
+        """
         seq_match = ReMethods().max_sequence_matcher(str1      = str1,
                                                      str2_list = str2_list)
 
@@ -817,7 +1012,13 @@ class PreprocessInf:
             return ["Use Spatial Index", None]
 
     def _local_cdr_conversion(self, local_schema_process: List):
+        """
+        Meant to do evaluation of outputs directly from the performer tools and not the CDR. Not fully-developed, do
+        not use.
 
+        :param local_schema_process:
+        :return:
+        """
         for cdr_file in tqdm(local_schema_process):
             data   = CDR2Vec(cdr_file = cdr_file)
             system = data.json_data['system']
